@@ -1,5 +1,6 @@
 package iptiQ
 
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.random.Random
 
 class NoProviders(override val message: String) : RuntimeException(message)
@@ -22,6 +23,14 @@ fun List<Provider>.withoutProvider(provider: Provider): List<Provider> {
     return filter { p -> p.id != provider.id }
 }
 
+fun withLock(lock: ReentrantLock, action: () -> Unit) {
+    lock.lock()
+    try {
+        action.invoke()
+    } finally {
+        lock.unlock()
+    }
+}
 
 interface LoadBalancingAlgorithm : ProviderSubscriber {
     fun get(): Provider?

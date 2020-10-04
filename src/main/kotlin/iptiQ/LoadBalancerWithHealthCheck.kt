@@ -1,5 +1,7 @@
 package iptiQ
 
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 
 enum class ProviderHealth {
     Dead,
@@ -17,30 +19,36 @@ fun Map<String, ProviderWithHealth>.withoutProvider(provider: Provider): Map<Str
     return minus(provider.id)
 }
 
+
 class LoadBalancerWithHealthCheck(
         override val id: String,
         private val underlyingLoadBalancer: LoadBalancer
 ) : LoadBalancer by underlyingLoadBalancer {
 
-    private var allProviders: Map<String, ProviderWithHealth> = emptyMap()
+    // To prevent health check and manual inclusion/exclusion racing with internal data structures
+    private val lock = ReentrantLock()
+    // We don't want Load Balancer consumers to go through `lock` above.
+    // Same time, internal structures updated should be visible to consumers
+    // So Using `AtomicReference` to make sure, what consumers see is latest.
+    private var allProviders: AtomicReference<Map<String, ProviderWithHealth>> = AtomicReference(emptyMap())
 
-    override fun addProvider(provider: Provider) {
-        inspect(provider, null)
+    override fun addProvider(provider: Provider) = withLock(lock) {
+            inspect(provider, null)
     }
 
-    override fun removeProvider(provider: Provider) {
-        allProviders = allProviders.withoutProvider(provider)
+    override fun removeProvider(provider: Provider) = withLock(lock) {
+        allProviders.set(allProviders.get().withoutProvider(provider))
         underlyingLoadBalancer.removeProvider(provider)
     }
 
     fun inspectAll() {
-        allProviders.forEach { (_, ph) -> inspect(ph.provider, ph.health) }
+        allProviders.get().forEach { (_, ph) -> inspect(ph.provider, ph.health) }
     }
 
-    private fun inspect(provider: Provider, lastKnownHealth: ProviderHealth?) {
+    private fun inspect(provider: Provider, lastKnownHealth: ProviderHealth?) = withLock(lock) {
         val latestHealth = latestHealth(provider, lastKnownHealth)
         if (latestHealth != lastKnownHealth) {
-            allProviders = allProviders.withProvider(provider, latestHealth)
+            allProviders.set(allProviders.get().withProvider(provider, latestHealth))
             if (latestHealth == ProviderHealth.AliveAndKicking) {
                 underlyingLoadBalancer.addProvider(provider)
             } else {

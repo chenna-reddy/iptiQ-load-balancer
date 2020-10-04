@@ -1,10 +1,9 @@
 package iptiQ
 
-import kotlinx.coroutines.*
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.time.ExperimentalTime
-import kotlin.time.milliseconds
-import kotlin.time.seconds
 
 object HealthyProvider1 : Provider {
     override val id: String = "Healthy1"
@@ -39,24 +38,31 @@ object DanglingProvider : Provider {
     }
 }
 
+fun consume(loadBalancer: LoadBalancer) {
+    val thread = Thread( {
+        val response = try {
+            "Response: ${loadBalancer.get()}"
+        } catch (e: Exception) {
+            "Error: ${e.message}"
+        }
+        println(response)
+    })
+    thread.isDaemon = true
+    thread.start()
+}
 
 @ExperimentalTime
-suspend fun main(args: Array<String>) = runBlocking {
+suspend fun main(args: Array<String>) {
     val loadBalancer = loadBalancer("LB1", RoundRobinLoadBalancingAlgorithm())
             .withCapacityLimit(2)
             .withHealthCheck()
 
-    val healthCheckTask = launch(Dispatchers.Default) {
-        for (i in 0 until 1000) {
-            println("Triggering Health check. $i")
-            delay(10.seconds)
-            launch {
-                withTimeout(10.seconds) {
-                    loadBalancer.inspectAll()
-                }
-            }
-        }
-    }
+    Executors.newSingleThreadScheduledExecutor()
+            .scheduleWithFixedDelay({
+                println("Triggering Health check")
+                loadBalancer.inspectAll()
+            }, 2, 5, TimeUnit.SECONDS)
+
     println("Started Load Balancer")
 
     loadBalancer.addProvider(HealthyProvider1)
@@ -64,16 +70,9 @@ suspend fun main(args: Array<String>) = runBlocking {
     loadBalancer.addProvider(UnHealthyProvider)
     loadBalancer.addProvider(DanglingProvider)
 
-    for (i in 0 until 1000) {
-        delay(300.milliseconds)
-        GlobalScope.launch {
-            val response = try {
-                "Response($i): ${loadBalancer.get()}"
-            } catch (e: Exception) {
-                "Error($i): ${e.message}"
-            }
-            println(response)
-        }
+    repeat(1000) {
+        Thread.sleep(250)
+        consume(loadBalancer)
     }
-    // healthCheckTask.join()
+
 }
